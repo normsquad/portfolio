@@ -54,10 +54,14 @@
         .slider:before { position: absolute; content: ""; height: 18px; width: 18px; left: 4px; bottom: 4px; background-color: white; transition: .2s; border-radius: 50%; }
         input:checked + .slider { background-color: #0084ff; }
         input:checked + .slider:before { transform: translateX(24px); }
+        
+        /* Centered System Notification Line Style */
+        .sys-log { text-align: center; font-size: 12px; color: var(--sub); font-style: italic; margin: 6px 0; width: 100%; align-self: center; }
     </style>
 </head>
 <body>
 <div class="container">
+    <!-- SETUP SCREEN -->
     <div id="setupScreen" class="screen">
         <h2>Emergency Chat</h2>
         <input type="text" id="usernameInput" placeholder="Your Nickname...">
@@ -66,9 +70,16 @@
         <input type="text" id="roomInput" placeholder="Enter 6-Digit Room Code">
         <button onclick="startChat(0)">Join Room</button>
     </div>
+
+    <!-- CHAT SCREEN -->
     <div id="chatScreen" class="screen hidden" style="padding: 0;">
         <div id="chatHeader">
-            <div><span style="cursor:pointer" onclick="tog('settingsModal')">⚙️</span> <span id="userTitle"></span></div>
+            <div>
+                <span style="cursor:pointer" onclick="tog('settingsModal')">⚙️</span> 
+                <span id="userTitle"></span> 
+                <!-- Pinned Online Device Indicator Badge -->
+                <span id="onlineCount" style="font-size:11px; margin-left:6px; opacity:0.8; background:rgba(0,0,0,0.15); padding:2px 6px; border-radius:10px;">👥 1 online</span>
+            </div>
             <span id="roomBadge" onclick="navigator.clipboard.writeText(roomCode);alert('Copied!')">Code: <span id="roomTitle"></span> 📋</span>
         </div>
         <div style="flex: 1; display: flex; flex-direction: column; min-height: 0;">
@@ -80,12 +91,15 @@
                 <button onclick="send('text')">Send</button>
             </div>
         </div>
+        
         <input type="file" id="imgFile" accept="image/*" style="display:none;" onchange="imgUp(this)">
+        
         <div id="optionsTray" class="tray hidden">
             <button class="tray-btn" onclick="tog('emojiTray')">😀 Emojis</button>
             <button class="tray-btn sec-btn" onclick="tog('pollModal')">📊 Create Poll</button>
             <button class="tray-btn img-btn" onclick="document.getElementById('imgFile').click()">📷 Add Image</button>
         </div>
+        
         <div id="emojiTray" class="tray hidden">
             <div style="display:grid;grid-template-columns:repeat(8,1fr);gap:8px;font-size:22px;text-align:center;">
                 <span onclick="addEmo('😀')" style="cursor:pointer">😀</span><span onclick="addEmo('😂')" style="cursor:pointer">😂</span>
@@ -95,12 +109,16 @@
             </div>
         </div>
     </div>
+
+    <!-- CONTEXT ACTIONS PANEL OVERLAY -->
     <div id="reactionMenu" class="pop hidden">
         <div class="emo-row"><span onclick="react('👍')">👍</span><span onclick="react('❤️')">❤️</span><span onclick="react('😂')">😂</span><span onclick="react('🔥')">🔥</span></div>
         <button id="mSave" class="m-act-btn" onclick="saveImg()">💾 Save Image</button>
         <button class="m-act-btn" onclick="delMe()">🗑️ Delete for me</button>
         <button id="mUnsend" class="m-act-btn danger" onclick="unsend()">💥 Unsend</button>
     </div>
+
+    <!-- POLL MODAL -->
     <div id="pollModal" class="overlay hidden">
         <div class="modal">
             <h3>New Live Poll</h3>
@@ -109,6 +127,8 @@
             <button class="sec-btn" onclick="tog('pollModal',1)" style="background:#999;">Cancel</button>
         </div>
     </div>
+
+    <!-- CONFIGURATION PANEL -->
     <div id="settingsModal" class="overlay hidden">
         <div class="modal">
             <h3>Settings</h3>
@@ -117,8 +137,9 @@
         </div>
     </div>
 </div>
+
 <script>
-    let username, roomCode, actId, tOut, voted = {}, cacheStore = {};
+    let username, roomCode, actId, tOut, ws, voted = {}, cacheStore = {};
     const tog = (id, h) => document.getElementById(id).classList[h?'add':'toggle']('hidden');
     const hideAll = () => ['optionsTray','emojiTray','reactionMenu'].forEach(t=>tog(t,1));
 
@@ -129,34 +150,85 @@
         document.getElementById('roomTitle').innerText = roomCode;
         document.getElementById('userTitle').innerText = username;
         tog('setupScreen',1); tog('chatScreen',0);
-        window.addEventListener('storage', e => {
-            if(e.key === `msg_relay_${roomCode}`) {
-                let d = JSON.parse(e.newValue);
-                if(d.sender !== username) { if(d.type==='image') cacheStore[d.id]=d.src; render(d); }
-            } else if(e.key === `type_${roomCode}`) {
-                let d = JSON.parse(e.newValue);
-                document.getElementById('typingIndicator').innerText = d.active && d.sender !== username ? `✍️ ${d.sender} is typing...` : '';
-            } else if(e.key.startsWith(`rx_${roomCode}_`)) {
-                applyReactionBadgeToUI(e.key.split('_').pop(), e.newValue);
-            } else if(e.key.startsWith(`vote_${roomCode}_`)) {
-                let s = e.key.split('_'), o = document.getElementById(`${s[s.length-2]}_v${s[s.length-1]}`);
-                if(o) o.querySelector('b').innerText = e.newValue;
-            } else if(e.key === `unsend_${roomCode}`) {
-                applyUnsendToUI(JSON.parse(e.newValue));
-            }
+        
+        // FIXED: Multi-Device Web Socket Tunnel Architecture 
+        ws = new WebSocket('wss://socketsbay.com');
+
+        ws.onopen = () => {
+            // Signal connection entry pack to the live data pool
+            relayNetworkPacket({ systemAct: 'join', user: username });
+        };
+
+        ws.onmessage = e => {
+            try {
+                let p = JSON.parse(e.data);
+                if (p.room !== roomCode) return; // Drop signals not matching this room channel signature
+
+                if (p.systemAct === 'join') {
+                    injectSystemLog(`${p.user} joined the room`);
+                    relayNetworkPacket({ systemAct: 'presence_reply' });
+                } else if (p.systemAct === 'leave') {
+                    injectSystemLog(`${p.user} left the room`);
+                } else if (p.systemAct === 'presence_reply') {
+                    updateUserCountDisplay(1);
+                } else if (p.type === 'typing') {
+                    document.getElementById('typingIndicator').innerText = p.active && p.sender !== username ? `✍️ ${p.sender} is typing...` : '';
+                } else if (p.type === 'unsend') {
+                    applyUnsendToUI(p);
+                } else if (p.type === 'vote') {
+                    let o = document.getElementById(`${p.pollId}_v${p.opt}`);
+                    if(o) o.querySelector('b').innerText = p.val;
+                } else if (p.type === 'react') {
+                    applyReactionBadgeToUI(p.msgId, p.emoji);
+                } else {
+                    if (p.sender !== username) {
+                        if(p.type === 'image') cacheStore[p.id] = p.src;
+                        render(p);
+                    }
+                }
+            } catch(err) {}
+        };
+
+        // Window shutdown hooks cleanly flag device exit events
+        window.addEventListener('beforeunload', () => {
+            relayNetworkPacket({ systemAct: 'leave', user: username });
         });
     }
 
+    function relayNetworkPacket(packetObj) {
+        if (ws && ws.readyState === WebSocket.OPEN) {
+            packetObj.room = roomCode;
+            ws.send(JSON.stringify(packetObj));
+        }
+    }
+
+    function updateUserCountDisplay(amt) {
+        let el = document.getElementById('onlineCount');
+        let current = parseInt(el.innerText.match(/\d+/)[0]) || 1;
+        let nextCount = Math.max(1, current + amt);
+        el.innerText = `👥 ${nextCount} online`;
+    }
+
+    function injectSystemLog(textStr) {
+        let box = document.getElementById('messageBox'), log = document.createElement('div');
+        log.className = 'sys-log'; log.innerText = textStr;
+        box.appendChild(log); box.scrollTop = box.scrollHeight;
+        updateUserCountDisplay(textStr.includes('joined') ? 1 : -1);
+    }
+
     function typeStat() {
-        localStorage.setItem(`type_${roomCode}`, JSON.stringify({sender:username, active:true}));
-        clearTimeout(tOut); tOut = setTimeout(() => localStorage.setItem(`type_${roomCode}`, JSON.stringify({sender:username, active:false})), 1500);
+        relayNetworkPacket({ type: 'typing', sender: username, active: true });
+        clearTimeout(tOut); tOut = setTimeout(() => relayNetworkPacket({ type: 'typing', sender: username, active: false }), 1500);
     }
 
     function send(type) {
         let id = 'id_' + Date.now() + '_' + Math.floor(Math.random()*100), p = {id, type, sender:username};
         if(type==='text') { p.text = document.getElementById('msgInput').value.trim(); if(!p.text) return; document.getElementById('msgInput').value=''; }
         if(type==='poll') { p.q = document.getElementById('pQ').value.trim(); p.o1 = document.getElementById('pO1').value.trim(); p.o2 = document.getElementById('pO2').value.trim(); if(!p.q||!p.o1||!p.o2) return alert("Fill poll."); tog('pollModal',1); }
-        render(p); localStorage.setItem(`msg_relay_${roomCode}`, JSON.stringify(p)); hideAll();
+        
+        render(p);
+        relayNetworkPacket(p);
+        hideAll();
     }
 
     function imgUp(i) {
@@ -164,7 +236,9 @@
         let r = new FileReader(); r.onload = e => {
             let id = 'img_' + Date.now(), base = e.target.result; cacheStore[id] = base;
             let p = {id, type:'image', sender:username, src:base};
-            render(p); localStorage.setItem(`msg_relay_${roomCode}`, JSON.stringify(p)); hideAll();
+            render(p);
+            relayNetworkPacket(p);
+            hideAll();
         }; r.readAsDataURL(i.files[0]); i.value='';
     }
 
@@ -187,17 +261,25 @@
         if(voted[id]) return; voted[id] = n;
         let c = document.getElementById(`c_${id}`), o = document.getElementById(`${id}_v${n}`), num = o.querySelector('b');
         c.classList.add('disabled-poll'); o.classList.add('my-choice'); num.innerText = parseInt(num.innerText)+1;
-        localStorage.setItem(`vote_${roomCode}_${id}_${n}`, num.innerText);
+        relayNetworkPacket({ type: 'vote', pollId: id, opt: n, val: num.innerText });
     }
 
-    function react(emoji) { applyReactionBadgeToUI(actId, emoji); localStorage.setItem(`rx_${roomCode}_${actId}`, emoji); hideAll(); }
+    function react(emoji) { applyReactionBadgeToUI(actId, emoji); relayNetworkPacket({ type: 'react', msgId: actId, emoji: emoji }); hideAll(); }
     function applyReactionBadgeToUI(id, emoji) { let el = document.getElementById(id); if(!el) return; let old = el.querySelector('.rx-badge'); if(old) old.remove(); let b = document.createElement('div'); b.className = 'rx-badge'; b.innerText = emoji; el.appendChild(b); }
     function delMe() { let el = document.getElementById(actId); if(el) el.remove(); hideAll(); }
     function saveImg() { let a = document.createElement('a'); a.href = cacheStore[actId]; a.download = 'emergency_photo.png'; document.body.appendChild(a); a.click(); a.remove(); hideAll(); }
-    function unsend() { let d = {id:actId, sender:username}; applyUnsendToUI(d); localStorage.setItem(`unsend_${roomCode}`, JSON.stringify(d)); localStorage.removeItem(`unsend_${roomCode}`); hideAll(); }
+    
+    function unsend() { 
+        let d = {id:actId, sender:username, type:'unsend'}; 
+        applyUnsendToUI(d); 
+        relayNetworkPacket(d); 
+        hideAll(); 
+    }
+    
     function applyUnsendToUI(d) { let el = document.getElementById(d.id), me = d.sender===username; if(!el) return; el.innerHTML = `<div class="msg ${me?'sent':'received'}" style="font-style:italic; opacity:0.6;"><span class="sender">${me?'You':d.sender}</span>${me?'You':d.sender} unsent a message</div>`; }
     function addEmo(e) { document.getElementById('msgInput').value += e; }
 </script>
 </body>
 </html>
+
 
